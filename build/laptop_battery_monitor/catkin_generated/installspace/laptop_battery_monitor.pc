@@ -1,0 +1,8 @@
+prefix=/home/sw0och/catkin_ws/install
+
+Name: laptop_battery_monitor
+Description: Description of laptop_battery_monitor
+Version: 0.2.2
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: sensor_msgs diagnostic_msgs

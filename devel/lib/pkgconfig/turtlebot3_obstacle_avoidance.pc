@@ -1,0 +1,8 @@
+prefix=/home/edoh/catkin_ws/devel
+
+Name: turtlebot3_obstacle_avoidance
+Description: Description of turtlebot3_obstacle_avoidance
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

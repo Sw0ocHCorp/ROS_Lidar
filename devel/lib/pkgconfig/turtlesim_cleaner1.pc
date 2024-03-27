@@ -1,0 +1,8 @@
+prefix=/home/sw0och/catkin_ws/devel
+
+Name: turtlesim_cleaner1
+Description: Description of turtlesim_cleaner1
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: geometry_msgs message_runtime roscpp rospy std_msgs

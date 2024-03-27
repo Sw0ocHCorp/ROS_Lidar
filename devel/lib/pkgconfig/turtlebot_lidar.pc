@@ -1,0 +1,8 @@
+prefix=/home/edoh/catkin_ws/devel
+
+Name: turtlebot_lidar
+Description: Description of turtlebot_lidar
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 

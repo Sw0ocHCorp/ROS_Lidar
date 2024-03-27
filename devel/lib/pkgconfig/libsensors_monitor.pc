@@ -1,0 +1,8 @@
+prefix=/home/sw0och/catkin_ws/devel
+
+Name: libsensors_monitor
+Description: Description of libsensors_monitor
+Version: 0.2.2
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 
