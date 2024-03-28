@@ -12,7 +12,9 @@ from sensor_msgs.msg import Joy
 from geometry_msgs.msg import Twist
 from fsm import fsm
 from kobuki_msgs.msg import BumperEvent
+from sensor_msgs.msg import LaserScan
 from time import perf_counter
+import math
 
 #############################################################################
 # class RobotBehavior
@@ -38,7 +40,11 @@ class RobotBehavior(object):
         self.time_stop= 0.33
         self.start_timer= True
         self.time_recul= 1
-        self.time_rotate= 0.5
+        self.time_rotate= 2.5
+        self.dist_detect = 1.0 # 1 m, to be adjusted
+        self.target_angle = 0.0
+        self.last_obstacle = 0.0
+        self.lidar_detection= False
         # instance of fsm with source state, destination state, condition (transition), callback (defaut: None)
         self.fs = fsm([ ("Start","JoyControl", True ),
                 ("JoyControl","AutonomousMode1", self.check_JoyControl_To_AutonomousMode1, self.DoAutonomousMode1),
@@ -46,6 +52,7 @@ class RobotBehavior(object):
                 ("AutonomousMode1","JoyControl", self.check_AutonomousMode1_To_JoyControl, self.DoJoyControl),
                 ("AutonomousMode1","AutonomousMode1", self.KeepAutonomousMode1, self.DoAutonomousMode1),
                 ("AutonomousMode1","stop1", self.check_AutonomousMode1_To_stop1, self.Dostop1),
+                
                 ("stop1","stop1", self.Keepstop1, self.Dostop1),
                 ("stop1","recule", self.check_stop1_To_recule, self.Dorecule),
                 ("recule","recule", self.Keeprecule, self.Dorecule),
@@ -63,7 +70,25 @@ class RobotBehavior(object):
         if ((not self.bumpdetected) and (data.state == BumperEvent.PRESSED)):
             self.bumpdetected=True
             self.bumper_no=data.bumper
-            rospy.loginfo("no : %d, val:%d", data.bumper,data.state)
+            #rospy.loginfo("no : %d, val:%d", data.bumper,data.state)
+    #############################################################################
+    # Lidar
+    #############################################################################
+    def processScan(self, data):
+        
+        scan_range = data.angle_max - data.angle_min
+        nb_values = len(data.ranges) # nombre de valeurs renvoyees par le lidar
+
+        for count,value in enumerate(data.ranges):
+                if value < self.dist_detect:
+                    self.lidar_detection = True
+                    self.last_obstacle = not math.isnan(value)
+                    self.target_angle = data.angle_min + count* data.angle_increment
+                    break
+                
+                
+    def pid_angular_controller(self):
+        pass
 
     #############################################################################
     # callback for joystick feedback
@@ -90,8 +115,8 @@ class RobotBehavior(object):
     # smoothing velocity function to avoid brutal change of velocity
     #############################################################################
     def smooth_velocity(self):
-        accmax = 0.01;
-        accwmax = 0.05;
+        accmax = 0.01
+        accwmax = 0.05
         vjoy = 0.0
         wjoy = 0.0
         vold = 0.0
@@ -154,7 +179,10 @@ class RobotBehavior(object):
         return self.joy_activated
 
     def check_AutonomousMode1_To_stop1(self,fss):
-        return self.bumpdetected
+        return self.bumpdetected or self.lidar_detection
+    
+    def check_AutonomousMode1_To_recule(self,fss):
+        return self.lidar_detection and self.bumpdetected == False
 
     def check_stop1_To_recule(self,fss):
         return self.cpt == 1
@@ -225,6 +253,7 @@ class RobotBehavior(object):
     def Dostop1(self,fss,value):
         self.cpt=0
         self.bumpdetected=False
+        self.lidar_detection = False
         self.button_pressed =  False;
         # do counter
         if self.start_timer == True:
@@ -276,6 +305,7 @@ class RobotBehavior(object):
         self.cpt=0
         self.enough = False
         self.bumpdetected=False
+        self.lidar_detection = True
         self.button_pressed =  False;
         # do counter
         if self.start_timer == True:
@@ -323,6 +353,8 @@ if __name__ == '__main__':
 
         MyRobot = RobotBehavior(pub,T)
         rospy.Subscriber("joy", Joy, MyRobot.callback,queue_size=1)
+        #lidar
+        rospy.Subscriber("scan", LaserScan, MyRobot.processScan)
         MyRobot.fs.start("Start")
         rospy.Subscriber("/mobile_base/events/bumper",BumperEvent,MyRobot.processBump,queue_size=1)
         # loop at rate Hz
