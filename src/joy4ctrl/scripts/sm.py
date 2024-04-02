@@ -39,9 +39,9 @@ class RobotBehavior(object):
         self.T = T
         self.time_stop= 0.33
         self.start_timer= True
-        self.time_recul= 1
+        self.time_recul= 2.5
         self.time_rotate= 2.5
-        self.dist_detect = 1.0 # 1 m, to be adjusted
+        self.dist_detect = 1.25 # 1 m, to be adjusted
         self.target_angle = 0.0
         self.last_obstacle = 0.0
         self.lidar_detection= False
@@ -86,10 +86,6 @@ class RobotBehavior(object):
                     self.target_angle = data.angle_min + count* data.angle_increment
                     break
                 
-                
-    def pid_angular_controller(self):
-        pass
-
     #############################################################################
     # callback for joystick feedback
     #############################################################################
@@ -271,6 +267,7 @@ class RobotBehavior(object):
         self.cpt=0
         self.enough = False
         self.bumpdetected=False
+        self.lidar_detection = False
         self.button_pressed =  False;
         # do counter
         if self.start_timer == True:
@@ -288,6 +285,7 @@ class RobotBehavior(object):
         self.cpt=0
         self.enough = False
         self.bumpdetected=False
+        self.lidar_detection = False
         self.button_pressed =  False;
         # do counter
         if self.start_timer == True:
@@ -322,6 +320,7 @@ class RobotBehavior(object):
         self.cpt=0
         self.enough = False
         self.bumpdetected=False
+        self.lidar_detection = False
         self.button_pressed =  False;
         # do counter
         if self.start_timer == True:

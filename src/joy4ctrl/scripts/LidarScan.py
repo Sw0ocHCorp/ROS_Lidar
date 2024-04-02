@@ -45,7 +45,7 @@ def processScan(data):
 # main function
 #############################################################################
 if __name__ == '__main__':
-	rospy.init_node('lidar_scan', anonymous=True)
+	rospy.init_node('scan', anonymous=True)
 	Hz = 10
 	rate = rospy.Rate(Hz)
 	T = 1.0 / Hz
