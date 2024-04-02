@@ -305,7 +305,7 @@ class RobotBehavior(object):
         self.cpt=0
         self.enough = False
         self.bumpdetected=False
-        self.lidar_detection = True
+        self.lidar_detection = False
         self.button_pressed =  False;
         # do counter
         if self.start_timer == True:
@@ -347,7 +347,7 @@ if __name__ == '__main__':
         #pub = rospy.Publisher('cmd_vel', Twist)
         # turtlesim   
         #pub = rospy.Publisher('turtle1/cmd_vel', Twist)
-        Hz = 10
+        Hz = 50
         rate = rospy.Rate(Hz)
         T = 1.0/Hz
 
