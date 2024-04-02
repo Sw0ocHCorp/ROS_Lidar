@@ -51,8 +51,8 @@ class RobotBehavior(object):
                 ("JoyControl","JoyControl", self.KeepJoyControl, self.DoJoyControl),
                 ("AutonomousMode1","JoyControl", self.check_AutonomousMode1_To_JoyControl, self.DoJoyControl),
                 ("AutonomousMode1","AutonomousMode1", self.KeepAutonomousMode1, self.DoAutonomousMode1),
+                ("AutonomousMode1","rotate", self.check_AutonomousMode1_To_rotate, self.Dorotate),
                 ("AutonomousMode1","stop1", self.check_AutonomousMode1_To_stop1, self.Dostop1),
-                
                 ("stop1","stop1", self.Keepstop1, self.Dostop1),
                 ("stop1","recule", self.check_stop1_To_recule, self.Dorecule),
                 ("recule","recule", self.Keeprecule, self.Dorecule),
@@ -175,16 +175,18 @@ class RobotBehavior(object):
         return self.joy_activated
 
     def check_AutonomousMode1_To_stop1(self,fss):
-        return self.bumpdetected or self.lidar_detection
+        return self.bumpdetected #or self.lidar_detection
     
     def check_AutonomousMode1_To_recule(self,fss):
-        return self.lidar_detection and self.bumpdetected == False
+        return self.bumpdetected == False #and self.lidar_detection
 
     def check_stop1_To_recule(self,fss):
         return self.cpt == 1
 
+    def check_AutonomousMode1_To_rotate(self, fss):
+        return self.lidar_detection and self.bumpdetected == False
+
     def check_stop2_To_rotate(self,fss):
-        #return self.button_pressed
         return self.cpt == 2
 
     def check_stop3_To_AutonomousMode1(self,fss):
@@ -200,7 +202,7 @@ class RobotBehavior(object):
         return (not self.check_JoyControl_To_AutonomousMode1(fss))
 
     def KeepAutonomousMode1(self,fss):
-        return (not self.check_AutonomousMode1_To_JoyControl(fss) and not self.check_AutonomousMode1_To_stop1(fss))
+        return (not self.check_AutonomousMode1_To_JoyControl(fss) and not self.check_AutonomousMode1_To_stop1(fss)) and self.lidar_detection == False
 
     def Keepstop1(self,fss):
         return not self.check_stop1_To_recule(fss)
@@ -249,7 +251,7 @@ class RobotBehavior(object):
     def Dostop1(self,fss,value):
         self.cpt=0
         self.bumpdetected=False
-        self.lidar_detection = False
+        #self.lidar_detection = False
         self.button_pressed =  False;
         # do counter
         if self.start_timer == True:
@@ -325,7 +327,7 @@ class RobotBehavior(object):
         # do counter
         if self.start_timer == True:
             self.start_timer = False
-            start_time= perf_counter()
+            self.start_time= perf_counter()
         go_rotate = Twist()
         go_rotate.angular.z = -self.vmax/2
         self.pub.publish(go_rotate)
