@@ -13,6 +13,10 @@ from geometry_msgs.msg import Twist
 from fsm import fsm
 from kobuki_msgs.msg import BumperEvent
 from sensor_msgs.msg import LaserScan
+from nav_msgs.msg import Odometry
+# importation de fonctions utiles de transformations de repere (tf : transformation de repere)
+import tf
+from tf.transformations import *
 from time import perf_counter
 import math
 
@@ -42,7 +46,9 @@ class RobotBehavior(object):
         self.time_recul= 2.5
         self.time_rotate= 2.5
         self.dist_detect = 1.25 # 1 m, to be adjusted
-        self.target_angle = 0.0
+        self.odo_rotate_angle= (2*math.pi)/3
+        self.odo_target_angle = None
+        
         self.last_obstacle = 0.0
         self.lidar_detection= False
         # instance of fsm with source state, destination state, condition (transition), callback (defaut: None)
@@ -83,9 +89,22 @@ class RobotBehavior(object):
                 if value < self.dist_detect:
                     self.lidar_detection = True
                     self.last_obstacle = not math.isnan(value)
-                    self.target_angle = data.angle_min + count* data.angle_increment
+                    #self.target_angle = data.angle_min + count* data.angle_increment
                     break
-                
+
+    def OdoCallback(self, data):
+        self.position = data.pose.pose.position
+        self.orientation = data.pose.pose.orientation
+        # extraction de l'angle de lacet
+        q = [self.orientation.x,self.orientation.y,self.orientation.z,self.orientation.w]
+        euler = tf.transformations.euler_from_quaternion(q)
+        self.angle_lacet = abs(euler[2])
+
+    def normalize_angle(self, angle):
+        while angle < 0:
+            angle += 2 * math.pi
+        return angle % (2 * math.pi) if angle < math.pi else (2 * math.pi - angle)
+
     #############################################################################
     # callback for joystick feedback
     #############################################################################
@@ -324,8 +343,8 @@ class RobotBehavior(object):
         self.bumpdetected=False
         self.lidar_detection = False
         self.button_pressed =  False;
-        # do counter
-        if self.start_timer == True:
+        # do counter    || Sans Odometrie
+        """if self.start_timer == True:
             self.start_timer = False
             self.start_time= perf_counter()
         go_rotate = Twist()
@@ -333,7 +352,16 @@ class RobotBehavior(object):
         self.pub.publish(go_rotate)
         if self.start_timer == False and (perf_counter() - self.start_time) >= self.time_rotate:
             self.start_timer= True
+            self.enough = True"""
+        if self.odo_target_angle == None:
+            self.odo_target_angle = self.normalize_angle(self.angle_lacet + self.odo_rotate_angle)
+        go_rotate = Twist()
+        go_rotate.angular.z = self.vmax/2
+        self.pub.publish(go_rotate)
+        if self.angle_lacet >= self.odo_target_angle - 0.1 and self.angle_lacet <= self.odo_target_angle + 0.1:
+            self.start_timer= True
             self.enough = True
+            self.odo_target_angle = None
         pass
 
 #############################################################################
@@ -356,6 +384,8 @@ if __name__ == '__main__':
         rospy.Subscriber("joy", Joy, MyRobot.callback,queue_size=1)
         #lidar
         rospy.Subscriber("scan", LaserScan, MyRobot.processScan)
+        #Odometrie
+        rospy.Subscriber("odom", Odometry, MyRobot.OdoCallback,queue_size = 1)  
         MyRobot.fs.start("Start")
         rospy.Subscriber("/mobile_base/events/bumper",BumperEvent,MyRobot.processBump,queue_size=1)
         # loop at rate Hz
