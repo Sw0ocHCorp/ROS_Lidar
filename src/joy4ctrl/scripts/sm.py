@@ -25,7 +25,7 @@ class GyroSensor:
     def __init__(self, default_rotation_angle= 180) -> None:
         self.default_rotation_angle = default_rotation_angle
         self.main_angle = 0.0
-        self.rotation_target= 0
+        self.rotation_target= default_rotation_angle
         self.angle_target= 0
 
     def OdoCallback(self, data):
@@ -39,10 +39,10 @@ class GyroSensor:
     
     def RegisterTargetAngle(self, rotation):
         self.rotation_target= rotation
-        self.angle_target = self.main_angle + self.rotation_target
+        self.angle_target = NormalizeAngle(self.main_angle + self.rotation_target)
     
     def Reset(self):
-        self.rotation_target= 0
+        self.rotation_target= self.default_rotation_angle
         self.angle_target= 0
     
 class LidarSensor:
@@ -50,19 +50,27 @@ class LidarSensor:
         self.obstacle_detection= False
         self.dist_detection= dist_detection
         self.interest_points= {}
-        self.extract_points= False
+        self.is_extract_points= None
         self.farest_obstacle= 0
         self.gyro_sensor= gyro_sensor
 
     def processScan(self, data):        
         self.scan_range = Rad2Deg(data.angle_max - data.angle_min)
         nb_values = len(data.ranges) # nombre de valeurs renvoyees par le lidar
-        if self.extract_points:
+        if self.is_extract_points:
             if np.nanmax(data.ranges) > self.farest_obstacle:
                 self.farest_obstacle = np.nanmax(data.ranges)
-                self.interest_points[self.farest_obstacle] = self.gyro_sensor.main_angle + ((self.scan_range / 2) - (self.scan_range * data.ranges.index(self.farest_obstacle)))
-        if np.nanmin(data.ranges):
+                self.interest_points[self.farest_obstacle] = self.gyro_sensor.main_angle + ((self.scan_range / 2) - (self.scan_range * (data.ranges.index(self.farest_obstacle) / nb_values)))
+        if np.nanmin(data.ranges) < self.dist_detection:
             self.obstacle_detection = True
+
+    def Reset(self, deep_reset= False):
+        self.is_extract_points = False
+        if deep_reset:
+            self.is_extract_points = None
+        self.farest_obstacle = 0
+        self.interest_points = {}
+        self.obstacle_detection = False
         
 class BumperSensor:
     def __init__(self) -> None:
@@ -85,7 +93,7 @@ class RobotBehavior(object):
     #############################################################################
     def __init__(self, handle_pub, T):
         self.gyro_sensor= GyroSensor()
-        self.lidar_sensor = LidarSensor()
+        self.lidar_sensor = LidarSensor(self.gyro_sensor)
         self.bumper_sensor= BumperSensor()
         self.twist = Twist()
         self.twist_real = Twist()
@@ -104,12 +112,7 @@ class RobotBehavior(object):
         self.start_timer= True
         self.time_recul= 2.5
         self.time_rotate= 2.5
-        self.dist_detect = 1.25 # 1 m, to be adjusted
-        self.odo_rotate_angle= (2*math.pi)/3
-        self.odo_target_angle = None
         
-        self.last_obstacle = 0.0
-        self.lidar_sensor.obstacle_detection= False
         # instance of fsm with source state, destination state, condition (transition), callback (defaut: None)
         self.fs = fsm([ ("Start","JoyControl", True ),
                 ("JoyControl","AutonomousMode1", self.check_JoyControl_To_AutonomousMode1, self.DoAutonomousMode1),
@@ -283,6 +286,7 @@ class RobotBehavior(object):
         pass
 
     def DoAutonomousMode1(self,fss,value):
+        self.lidar_sensor.Reset(True)
         self.cpt=0
         self.enough = False
         self.button_pressed =  False;
@@ -362,19 +366,37 @@ class RobotBehavior(object):
     def Dorotate(self,fss,value):
         self.cpt=0
         self.enough = False
-        self.lidar_sensor.obstacle_detection = False
-        self.button_pressed =  False;
-
-        
-        if self.odo_target_angle == None:
-            self.odo_target_angle = self.normalize_angle(self.angle_lacet + self.odo_rotate_angle)
+        self.button_pressed =  False
+        #SCAN 1ere Etape: Scan de la Pièce pour récupérer les points les plus loins de cette scène
+        if self.lidar_sensor.obstacle_detection and self.lidar_sensor.is_extract_points == None:
+            self.lidar_sensor.is_extract_points = True
+            self.gyro_sensor.RegisterTargetAngle(330)
+        #COLLISION: Rotation de l'angle de rotation initial
+        elif self.bumper_sensor.collision and self.lidar_sensor.obstacle_detection == False:
+            self.gyro_sensor.RegisterTargetAngle(self.gyro_sensor.default_rotation_angle)
         go_rotate = Twist()
         go_rotate.angular.z = self.vmax/2
+        if self.gyro_sensor.rotation_target < 0:
+            go_rotate.angular.z *= -1
+
         self.pub.publish(go_rotate)
-        if self.angle_lacet >= self.odo_target_angle - 0.1 and self.angle_lacet <= self.odo_target_angle + 0.1:
-            self.start_timer= True
-            self.enough = True
-            self.odo_target_angle = None
+        if self.gyro_sensor.main_angle >= self.gyro_sensor.angle_target - 10 and self.gyro_sensor.main_angle <= self.gyro_sensor.angle_target + 10:
+            #SCAN 2eme Etape: On à fini de Scanner la pièce, on va ensuite viser le point le plus loin de la scène
+            if self.lidar_sensor.is_extract_points == True:
+                #Récupération de la position du point le plus loin
+                farest_obstacle= sorted(self.lidar_sensor.interest_points.keys(), reverse= True)[0]
+                farest_obstacle_angle= self.lidar_sensor.interest_points[farest_obstacle]
+                target_rotation = self.gyro_sensor.main_angle - farest_obstacle_angle
+                #RESET Capteurs
+                self.gyro_sensor.Reset()
+                self.lidar_sensor.Reset()
+                self.gyro_sensor.RegisterTargetAngle(target_rotation)
+            #SORTIE de l'Etat ROTATE
+            elif self.lidar_sensor.is_extract_points == False or self.bumper_sensor.collision == False:
+                self.start_timer= True
+                self.enough = True
+                self.gyro_sensor.Reset()
+                self.lidar_sensor.Reset(True)
         pass
 
 #############################################################################
@@ -382,9 +404,6 @@ class RobotBehavior(object):
 #############################################################################
 def Rad2Deg(angle):
     return angle * 180 / math.pi
-
-def GetRotationNeeded(angle1, angle2):
-    return angle1 - angle2
 
 def NormalizeAngle(angle):
     if (abs(angle)):
@@ -409,11 +428,11 @@ if __name__ == '__main__':
         MyRobot = RobotBehavior(pub,T)
         rospy.Subscriber("joy", Joy, MyRobot.callback,queue_size=1)
         #lidar
-        rospy.Subscriber("scan", LaserScan, MyRobot.processScan)
+        rospy.Subscriber("scan", LaserScan, MyRobot.lidar_sensor.processScan)
         #Odometrie
-        rospy.Subscriber("odom", Odometry, MyRobot.OdoCallback,queue_size = 1)  
+        rospy.Subscriber("odom", Odometry, MyRobot.gyro_sensor.OdoCallback,queue_size = 1)  
         MyRobot.fs.start("Start")
-        rospy.Subscriber("/mobile_base/events/bumper",BumperEvent,MyRobot.processBump,queue_size=1)
+        rospy.Subscriber("/mobile_base/events/bumper",BumperEvent,MyRobot.bumper_sensor.processBump,queue_size=1)
         # loop at rate Hz
         while (not rospy.is_shutdown()):
             ret = MyRobot.fs.event("")
