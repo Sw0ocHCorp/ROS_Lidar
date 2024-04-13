@@ -19,6 +19,62 @@ import tf
 from tf.transformations import *
 from time import perf_counter
 import math
+import numpy as np
+
+class GyroSensor:
+    def __init__(self, default_rotation_angle= 180) -> None:
+        self.default_rotation_angle = default_rotation_angle
+        self.main_angle = 0.0
+        self.rotation_target= 0
+        self.angle_target= 0
+
+    def OdoCallback(self, data):
+        self.position = data.pose.pose.position
+        self.orientation = data.pose.pose.orientation
+        # extraction de l'angle de lacet
+        q = [self.orientation.x,self.orientation.y,self.orientation.z,self.orientation.w]
+        euler = tf.transformations.euler_from_quaternion(q)
+        self.main_angle = NormalizeAngle(Rad2Deg(euler[2]))
+
+    
+    def RegisterTargetAngle(self, rotation):
+        self.rotation_target= rotation
+        self.angle_target = self.main_angle + self.rotation_target
+    
+    def Reset(self):
+        self.rotation_target= 0
+        self.angle_target= 0
+    
+class LidarSensor:
+    def __init__(self, gyro_sensor: GyroSensor, dist_detection= 2) -> None:
+        self.obstacle_detection= False
+        self.dist_detection= dist_detection
+        self.interest_points= {}
+        self.extract_points= False
+        self.farest_obstacle= 0
+        self.gyro_sensor= gyro_sensor
+
+    def processScan(self, data):        
+        self.scan_range = Rad2Deg(data.angle_max - data.angle_min)
+        nb_values = len(data.ranges) # nombre de valeurs renvoyees par le lidar
+        if self.extract_points:
+            if np.nanmax(data.ranges) > self.farest_obstacle:
+                self.farest_obstacle = np.nanmax(data.ranges)
+                self.interest_points[self.farest_obstacle] = self.gyro_sensor.main_angle + ((self.scan_range / 2) - (self.scan_range * data.ranges.index(self.farest_obstacle)))
+        if np.nanmin(data.ranges):
+            self.obstacle_detection = True
+        
+class BumperSensor:
+    def __init__(self) -> None:
+        self.collision= False
+        self.bumper_no= None
+
+    def processBump(self,data):
+        if ((not self.collision) and (data.state == BumperEvent.PRESSED)):
+            self.collision=True
+            self.bumper_no=data.bumper
+        else:
+            self.collision = False
 
 #############################################################################
 # class RobotBehavior
@@ -28,6 +84,9 @@ class RobotBehavior(object):
     # constructor, called at creation of instance
     #############################################################################
     def __init__(self, handle_pub, T):
+        self.gyro_sensor= GyroSensor()
+        self.lidar_sensor = LidarSensor()
+        self.bumper_sensor= BumperSensor()
         self.twist = Twist()
         self.twist_real = Twist()
         self.vreal = 0.0 # longitudial velocity
@@ -50,7 +109,7 @@ class RobotBehavior(object):
         self.odo_target_angle = None
         
         self.last_obstacle = 0.0
-        self.lidar_detection= False
+        self.lidar_sensor.obstacle_detection= False
         # instance of fsm with source state, destination state, condition (transition), callback (defaut: None)
         self.fs = fsm([ ("Start","JoyControl", True ),
                 ("JoyControl","AutonomousMode1", self.check_JoyControl_To_AutonomousMode1, self.DoAutonomousMode1),
@@ -72,38 +131,7 @@ class RobotBehavior(object):
     #############################################################################
     # Bumper
     #############################################################################   
-    def processBump(self,data):
-        if ((not self.bumpdetected) and (data.state == BumperEvent.PRESSED)):
-            self.bumpdetected=True
-            self.bumper_no=data.bumper
-            #rospy.loginfo("no : %d, val:%d", data.bumper,data.state)
-    #############################################################################
-    # Lidar
-    #############################################################################
-    def processScan(self, data):
-        
-        scan_range = data.angle_max - data.angle_min
-        nb_values = len(data.ranges) # nombre de valeurs renvoyees par le lidar
-
-        for count,value in enumerate(data.ranges):
-                if value < self.dist_detect:
-                    self.lidar_detection = True
-                    self.last_obstacle = not math.isnan(value)
-                    #self.target_angle = data.angle_min + count* data.angle_increment
-                    break
-
-    def OdoCallback(self, data):
-        self.position = data.pose.pose.position
-        self.orientation = data.pose.pose.orientation
-        # extraction de l'angle de lacet
-        q = [self.orientation.x,self.orientation.y,self.orientation.z,self.orientation.w]
-        euler = tf.transformations.euler_from_quaternion(q)
-        self.angle_lacet = abs(euler[2])
-
-    def normalize_angle(self, angle):
-        while angle < 0:
-            angle += 2 * math.pi
-        return angle % (2 * math.pi) if angle < math.pi else (2 * math.pi - angle)
+    
 
     #############################################################################
     # callback for joystick feedback
@@ -194,16 +222,16 @@ class RobotBehavior(object):
         return self.joy_activated
 
     def check_AutonomousMode1_To_stop1(self,fss):
-        return self.bumpdetected #or self.lidar_detection
+        return self.bumper_sensor.collision #or self.lidar_sensor.obstacle_detection
     
     def check_AutonomousMode1_To_recule(self,fss):
-        return self.bumpdetected == False #and self.lidar_detection
+        return self.bumper_sensor.collision == False #and self.lidar_sensor.obstacle_detection
 
     def check_stop1_To_recule(self,fss):
         return self.cpt == 1
 
     def check_AutonomousMode1_To_rotate(self, fss):
-        return self.lidar_detection and self.bumpdetected == False
+        return self.lidar_sensor.obstacle_detection and self.bumper_sensor.collision == False
 
     def check_stop2_To_rotate(self,fss):
         return self.cpt == 2
@@ -221,7 +249,7 @@ class RobotBehavior(object):
         return (not self.check_JoyControl_To_AutonomousMode1(fss))
 
     def KeepAutonomousMode1(self,fss):
-        return (not self.check_AutonomousMode1_To_JoyControl(fss) and not self.check_AutonomousMode1_To_stop1(fss)) and self.lidar_detection == False
+        return (not self.check_AutonomousMode1_To_JoyControl(fss) and not self.check_AutonomousMode1_To_stop1(fss)) and self.lidar_sensor.obstacle_detection == False
 
     def Keepstop1(self,fss):
         return not self.check_stop1_To_recule(fss)
@@ -249,7 +277,6 @@ class RobotBehavior(object):
         self.cpt=0
         self.enough = False
         self.button_pressed =  False;
-        self.bumpdetected=False
         self.smooth_velocity()
         self.pub.publish(self.twist_real)
         #print ('joy control : ',self.twist_real)
@@ -259,7 +286,6 @@ class RobotBehavior(object):
         self.cpt=0
         self.enough = False
         self.button_pressed =  False;
-        self.bumpdetected=False
         # go forward
         go_fwd = Twist()
         go_fwd.linear.x = self.vmax/2.0
@@ -269,8 +295,7 @@ class RobotBehavior(object):
 
     def Dostop1(self,fss,value):
         self.cpt=0
-        self.bumpdetected=False
-        #self.lidar_detection = False
+        #self.lidar_sensor.obstacle_detection = False
         self.button_pressed =  False;
         # do counter
         if self.start_timer == True:
@@ -287,8 +312,7 @@ class RobotBehavior(object):
     def Dostop2(self,fss,value):
         self.cpt=0
         self.enough = False
-        self.bumpdetected=False
-        self.lidar_detection = False
+        self.lidar_sensor.obstacle_detection = False
         self.button_pressed =  False;
         # do counter
         if self.start_timer == True:
@@ -305,8 +329,7 @@ class RobotBehavior(object):
     def Dostop3(self,fss,value):
         self.cpt=0
         self.enough = False
-        self.bumpdetected=False
-        self.lidar_detection = False
+        self.lidar_sensor.obstacle_detection = False
         self.button_pressed =  False;
         # do counter
         if self.start_timer == True:
@@ -323,8 +346,7 @@ class RobotBehavior(object):
     def Dorecule(self,fss,value):
         self.cpt=0
         self.enough = False
-        self.bumpdetected=False
-        self.lidar_detection = False
+        self.lidar_sensor.obstacle_detection = False
         self.button_pressed =  False;
         # do counter
         if self.start_timer == True:
@@ -340,19 +362,10 @@ class RobotBehavior(object):
     def Dorotate(self,fss,value):
         self.cpt=0
         self.enough = False
-        self.bumpdetected=False
-        self.lidar_detection = False
+        self.lidar_sensor.obstacle_detection = False
         self.button_pressed =  False;
-        # do counter    || Sans Odometrie
-        """if self.start_timer == True:
-            self.start_timer = False
-            self.start_time= perf_counter()
-        go_rotate = Twist()
-        go_rotate.angular.z = -self.vmax/2
-        self.pub.publish(go_rotate)
-        if self.start_timer == False and (perf_counter() - self.start_time) >= self.time_rotate:
-            self.start_timer= True
-            self.enough = True"""
+
+        
         if self.odo_target_angle == None:
             self.odo_target_angle = self.normalize_angle(self.angle_lacet + self.odo_rotate_angle)
         go_rotate = Twist()
@@ -367,6 +380,19 @@ class RobotBehavior(object):
 #############################################################################
 # main function
 #############################################################################
+def Rad2Deg(angle):
+    return angle * 180 / math.pi
+
+def GetRotationNeeded(angle1, angle2):
+    return angle1 - angle2
+
+def NormalizeAngle(angle):
+    if (abs(angle)):
+        angle%=360
+    elif angle < 0:
+        angle += 360
+    return angle
+
 if __name__ == '__main__':
     try:
         rospy.init_node('joy4ctrl')
