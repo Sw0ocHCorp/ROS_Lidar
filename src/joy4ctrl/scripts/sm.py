@@ -20,6 +20,7 @@ from tf.transformations import *
 from time import perf_counter
 import math
 import numpy as np
+import pandas as pd
 
 class GyroSensor:
     def __init__(self, default_rotation_angle= 180) -> None:
@@ -49,7 +50,7 @@ class LidarSensor:
     def __init__(self, gyro_sensor: GyroSensor, dist_detection= 2) -> None:
         self.obstacle_detection= False
         self.dist_detection= dist_detection
-        self.interest_points= {}
+        self.interest_points= {"OOB": []}
         self.is_extract_points= None
         self.farest_obstacle= 0
         self.gyro_sensor= gyro_sensor
@@ -58,9 +59,17 @@ class LidarSensor:
         self.scan_range = Rad2Deg(data.angle_max - data.angle_min)
         nb_values = len(data.ranges) # nombre de valeurs renvoyees par le lidar
         if self.is_extract_points:
-            if np.nanmax(data.ranges) > self.farest_obstacle:
+            #Si full nan sur 10 valeurs en face du robot, on considère qu'on dépasse la range du lidar  donc point d'intérêt
+            if np.isnan(np.array(data.ranges[nb_values//2 -25: nb_values//2 + 25])).sum() >= 50:
+                self.interest_points["OOB"].append(self.gyro_sensor.main_angle)
+            #Sinon si on a un objet plus loin que précédemment, en face du robot, on le considère comme un point d'intérêt
+            elif (np.nanmax(data.ranges[nb_values//2 -5: nb_values//2 + 5]) > self.farest_obstacle):
+                self.farest_obstacle = data.ranges[nb_values//2]
+                self.interest_points[self.farest_obstacle] = self.gyro_sensor.main_angle
+            
+            """if np.nanmax(data.ranges) > self.farest_obstacle:
                 self.farest_obstacle = np.nanmax(data.ranges)
-                self.interest_points[self.farest_obstacle] = self.gyro_sensor.main_angle + ((self.scan_range / 2) - (self.scan_range * (data.ranges.index(self.farest_obstacle) / nb_values)))
+                self.interest_points[self.farest_obstacle] = self.gyro_sensor.main_angle + ((self.scan_range * (data.ranges.index(self.farest_obstacle) / nb_values)) - (self.scan_range / 2))"""
         if np.nanmin(data.ranges) < self.dist_detection:
             self.obstacle_detection = True
 
@@ -69,7 +78,7 @@ class LidarSensor:
         if deep_reset:
             self.is_extract_points = None
         self.farest_obstacle = 0
-        self.interest_points = {}
+        self.interest_points = {"OOB": []}
         self.obstacle_detection = False
         
 class BumperSensor:
@@ -375,7 +384,7 @@ class RobotBehavior(object):
         elif self.bumper_sensor.collision and self.lidar_sensor.obstacle_detection == False:
             self.gyro_sensor.RegisterTargetAngle(self.gyro_sensor.default_rotation_angle)
         go_rotate = Twist()
-        go_rotate.angular.z = self.vmax/2
+        go_rotate.angular.z = self.vmax/3
         if self.gyro_sensor.rotation_target < 0:
             go_rotate.angular.z *= -1
 
@@ -384,9 +393,14 @@ class RobotBehavior(object):
             #SCAN 2eme Etape: On à fini de Scanner la pièce, on va ensuite viser le point le plus loin de la scène
             if self.lidar_sensor.is_extract_points == True:
                 #Récupération de la position du point le plus loin
-                farest_obstacle= sorted(self.lidar_sensor.interest_points.keys(), reverse= True)[0]
-                farest_obstacle_angle= self.lidar_sensor.interest_points[farest_obstacle]
-                target_rotation = self.gyro_sensor.main_angle - farest_obstacle_angle
+                
+                if len(self.lidar_sensor.interest_points["OOB"]) > 0:
+                    farest_obstacle_angle = self.lidar_sensor.interest_points["OOB"][len(self.lidar_sensor.interest_points["OOB"]) // 2]
+                else:
+                    farest_obstacle= sorted(self.lidar_sensor.interest_points.keys(), reverse= True)[0]
+                    farest_obstacle_angle= self.lidar_sensor.interest_points[farest_obstacle]
+                target_rotation = farest_obstacle_angle - self.gyro_sensor.main_angle
+                
                 #RESET Capteurs
                 self.gyro_sensor.Reset()
                 self.lidar_sensor.Reset()
