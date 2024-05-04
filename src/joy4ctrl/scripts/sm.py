@@ -54,13 +54,14 @@ class LidarSensor:
         self.is_extract_points= None
         self.farest_obstacle= 0
         self.gyro_sensor= gyro_sensor
+        self.distance_restante = []
 
     def processScan(self, data):        
         self.scan_range = Rad2Deg(data.angle_max - data.angle_min)
         nb_values = len(data.ranges) # nombre de valeurs renvoyees par le lidar
         if self.is_extract_points:
             #Si full nan sur 10 valeurs en face du robot, on considère qu'on dépasse la range du lidar  donc point d'intérêt
-            if np.isnan(np.array(data.ranges[nb_values//2 -25: nb_values//2 + 25])).sum() >= 50:
+            if np.isnan(np.array(data.ranges[nb_values//2 -35: nb_values//2 + 35])).sum() >= 50:
                 self.interest_points["OOB"].append(self.gyro_sensor.main_angle)
             #Sinon si on a un objet plus loin que précédemment, en face du robot, on le considère comme un point d'intérêt
             elif (np.nanmax(data.ranges[nb_values//2 -5: nb_values//2 + 5]) > self.farest_obstacle):
@@ -70,8 +71,9 @@ class LidarSensor:
             """if np.nanmax(data.ranges) > self.farest_obstacle:
                 self.farest_obstacle = np.nanmax(data.ranges)
                 self.interest_points[self.farest_obstacle] = self.gyro_sensor.main_angle + ((self.scan_range * (data.ranges.index(self.farest_obstacle) / nb_values)) - (self.scan_range / 2))"""
-        if np.nanmin(data.ranges) < self.dist_detection:
+        if np.nanmin(data.ranges) < (2*self.dist_detection):
             self.obstacle_detection = True
+            self.distance_restante = np.nanmin(data.ranges)
 
     def Reset(self, deep_reset= False):
         self.is_extract_points = False
@@ -102,7 +104,7 @@ class RobotBehavior(object):
     #############################################################################
     def __init__(self, handle_pub, T):
         self.gyro_sensor= GyroSensor()
-        self.lidar_sensor = LidarSensor(self.gyro_sensor)
+        self.lidar_sensor = LidarSensor(self.gyro_sensor, dist_detection= 0.5)
         self.bumper_sensor= BumperSensor()
         self.twist = Twist()
         self.twist_real = Twist()
@@ -128,18 +130,26 @@ class RobotBehavior(object):
                 ("JoyControl","JoyControl", self.KeepJoyControl, self.DoJoyControl),
                 ("AutonomousMode1","JoyControl", self.check_AutonomousMode1_To_JoyControl, self.DoJoyControl),
                 ("AutonomousMode1","AutonomousMode1", self.KeepAutonomousMode1, self.DoAutonomousMode1),
-                ("AutonomousMode1","rotate", self.check_AutonomousMode1_To_rotate, self.Dorotate),
+                #("AutonomousMode1","rotate", self.check_AutonomousMode1_To_rotate, self.Dorotate),
                 ("AutonomousMode1","stop1", self.check_AutonomousMode1_To_stop1, self.Dostop1),
+                ("stop1","JoyControl", self.check_stop1_To_JoyControl, self.DoJoyControl),
                 ("stop1","stop1", self.Keepstop1, self.Dostop1),
                 ("stop1","recule", self.check_stop1_To_recule, self.Dorecule),
+                ("recule","JoyControl", self.check_recule_To_JoyControl, self.DoJoyControl),
                 ("recule","recule", self.Keeprecule, self.Dorecule),
                 ("recule","stop2", self.check_recule_To_stop2, self.Dostop2),
-                 ("stop2","stop2", self.Keepstop2, self.Dostop2),
+                ("stop2","JoyControl", self.check_stop2_To_JoyControl, self.DoJoyControl),
+                ("stop2","stop2", self.Keepstop2, self.Dostop2),
                 ("stop2","rotate", self.check_stop2_To_rotate, self.Dorotate),
+                ("rotate","JoyControl", self.check_rotate_To_JoyControl, self.DoJoyControl),
                 ("rotate","rotate", self.Keeprotate, self.Dorotate),
-                    ("rotate","stop3", self.check_rotate_To_stop3, self.Dostop3),
+                ("rotate","stop3", self.check_rotate_To_stop3, self.Dostop3),
+                ("stop3","JoyControl", self.check_stop3_To_JoyControl, self.DoJoyControl),
                 ("stop3","stop3", self.Keepstop3, self.Dostop3),
-                ("stop3","AutonomousMode1", self.check_stop3_To_AutonomousMode1, self.DoAutonomousMode1),])
+                ("stop3","AutonomousMode1", self.check_stop3_To_AutonomousMode1, self.DoAutonomousMode1),
+                ("AutonomousMode1", "Virage", self.check_AutonomousMode1_To_Virage, self.DoVirage),
+                ("Virage", "Virage", self.KeepVirage, self.DoVirage),
+                ("Virage", "recule", self.check_Virage_To_recule, self.Dorecule)])
     #############################################################################
     # Bumper
     #############################################################################   
@@ -155,7 +165,7 @@ class RobotBehavior(object):
         self.twist.linear.z = 0
         self.twist.angular.x = 0
         self.twist.angular.y = 0
-        self.twist.angular.z = self.wmax*data.axes[2]
+        self.twist.angular.z = self.wmax*data.axes[0]
         #rospy.loginfo(rospy.get_name() + ": I publish linear=(%f,%f,%f), angular=(%f,%f,                            %f)",self.twist.linear.x,self.twist.linear.y,self.twist.linear.z,self.twist.angular.x,self.twist.angular.y,self.twist.angular.z)
     
         # for transition conditions of fsm
@@ -163,7 +173,7 @@ class RobotBehavior(object):
             self.button_pressed = (self.previous_signal==0 and data.buttons[0]==1)       
         self.previous_signal = data.buttons[0];
 
-        self.joy_activated = (abs(data.axes[1])>0.001 or abs(data.axes[2])>0.001)
+        self.joy_activated = (abs(data.axes[1])>0.001 or abs(data.axes[0])>0.001)
 
 
     #############################################################################
@@ -229,10 +239,6 @@ class RobotBehavior(object):
     def check_JoyControl_To_AutonomousMode1(self,fss):
         return self.button_pressed
 
-    def check_AutonomousMode1_To_JoyControl(self,fss):
-        #return self.button_pressed
-        return self.joy_activated
-
     def check_AutonomousMode1_To_stop1(self,fss):
         return self.bumper_sensor.collision #or self.lidar_sensor.obstacle_detection
     
@@ -242,8 +248,8 @@ class RobotBehavior(object):
     def check_stop1_To_recule(self,fss):
         return self.cpt == 1
 
-    def check_AutonomousMode1_To_rotate(self, fss):
-        return self.lidar_sensor.obstacle_detection and self.bumper_sensor.collision == False
+    #def check_AutonomousMode1_To_rotate(self, fss):
+    #    return  self.bumper_sensor.collision == False #and self.lidar_sensor.obstacle_detection
 
     def check_stop2_To_rotate(self,fss):
         return self.cpt == 2
@@ -256,27 +262,61 @@ class RobotBehavior(object):
 
     def check_rotate_To_stop3(self,fss):
         return self.enough == True
+    
+    def check_Virage_To_recule(self,fss):
+        return  self.twist.linear.x == 0 
+    
+    def check_AutonomousMode1_To_Virage(self,fss):
+        return self.lidar_sensor.obstacle_detection and self.bumper_sensor.collision == False
+    
+    #Le turtlebot doit pouvoir se controler au joystick peut importe l'état ou il est
+
+    def check_AutonomousMode1_To_JoyControl(self,fss):
+        return self.joy_activated or self.button_pressed
+    
+    def check_stop1_To_JoyControl(self,fss):
+        return self.joy_activated or self.button_pressed
+    
+    def check_stop2_To_JoyControl(self,fss):
+        return self.joy_activated or self.button_pressed
+    
+    def check_stop3_To_JoyControl(self,fss):
+        return self.joy_activated or self.button_pressed
+    
+    def check_recule_To_JoyControl(self,fss):
+        return self.joy_activated or self.button_pressed
+    
+    def check_rotate_To_JoyControl(self,fss):
+        return self.joy_activated or self.button_pressed
+    
+    def check_Virage_To_JoyControl(self,fss):
+        return self.joy_activated or self.button_pressed
+    
+    
 
     def KeepJoyControl(self,fss):
         return (not self.check_JoyControl_To_AutonomousMode1(fss))
 
     def KeepAutonomousMode1(self,fss):
-        return (not self.check_AutonomousMode1_To_JoyControl(fss) and not self.check_AutonomousMode1_To_stop1(fss)) and self.lidar_sensor.obstacle_detection == False
+        return (not self.check_AutonomousMode1_To_JoyControl(fss) and not self.check_AutonomousMode1_To_stop1(fss) and self.lidar_sensor.obstacle_detection == False  and not self.check_AutonomousMode1_To_Virage(fss))#and not self.check_AutonomousMode1_To_rotate(fss)
 
     def Keepstop1(self,fss):
-        return not self.check_stop1_To_recule(fss)
+        return not self.check_stop1_To_recule(fss) and not self.check_stop1_To_JoyControl(fss)
 
     def Keeprecule(self,fss):
-        return not self.check_recule_To_stop2(fss)
+        return not self.check_recule_To_stop2(fss) and not self.check_recule_To_JoyControl(fss)
 
     def Keepstop2(self,fss):
-        return not self.check_stop2_To_rotate(fss)
+        return not self.check_stop2_To_rotate(fss) and not self.check_stop2_To_JoyControl(fss)
 
     def Keeprotate(self,fss):
-        return not self.check_rotate_To_stop3(fss)
+        return not self.check_rotate_To_stop3(fss) and not self.check_rotate_To_JoyControl(fss)
 
     def Keepstop3(self,fss):
-        return (not self.check_stop3_To_AutonomousMode1(fss))
+        return (not self.check_stop3_To_AutonomousMode1(fss) and not self.check_stop3_To_JoyControl(fss))
+    
+    def KeepVirage(self,fss):
+        return (not self.check_Virage_To_recule(fss) and not self.check_Virage_To_JoyControl(fss))
 
 
 
@@ -384,7 +424,7 @@ class RobotBehavior(object):
         elif self.bumper_sensor.collision and self.lidar_sensor.obstacle_detection == False:
             self.gyro_sensor.RegisterTargetAngle(self.gyro_sensor.default_rotation_angle)
         go_rotate = Twist()
-        go_rotate.angular.z = self.vmax/3
+        go_rotate.angular.z = self.vmax
         if self.gyro_sensor.rotation_target < 0:
             go_rotate.angular.z *= -1
 
@@ -397,6 +437,7 @@ class RobotBehavior(object):
                 if len(self.lidar_sensor.interest_points["OOB"]) > 0:
                     farest_obstacle_angle = self.lidar_sensor.interest_points["OOB"][len(self.lidar_sensor.interest_points["OOB"]) // 2]
                 else:
+                    del self.lidar_sensor.interest_points["OOB"]
                     farest_obstacle= sorted(self.lidar_sensor.interest_points.keys(), reverse= True)[0]
                     farest_obstacle_angle= self.lidar_sensor.interest_points[farest_obstacle]
                 target_rotation = farest_obstacle_angle - self.gyro_sensor.main_angle
@@ -412,6 +453,12 @@ class RobotBehavior(object):
                 self.gyro_sensor.Reset()
                 self.lidar_sensor.Reset(True)
         pass
+
+    def DoVirage(self,fss,value):
+        while self.lidar_sensor.distance_restante > self.lidar_sensor.dist_detection:
+            self.twist.angular.z = self.twist.linear.x/90
+            self.twist.linear.x == 0 
+
 
 #############################################################################
 # main function
