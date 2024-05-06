@@ -54,7 +54,10 @@ class LidarSensor:
         self.is_extract_points= None
         self.farest_obstacle= 0
         self.gyro_sensor= gyro_sensor
-        self.distance_restante = []
+        self.avoid_obstacle= False
+        self.avoid_dist = 0
+        self.avoid_offset= 1.75
+
 
     def processScan(self, data):        
         self.scan_range = Rad2Deg(data.angle_max - data.angle_min)
@@ -71,12 +74,26 @@ class LidarSensor:
             """if np.nanmax(data.ranges) > self.farest_obstacle:
                 self.farest_obstacle = np.nanmax(data.ranges)
                 self.interest_points[self.farest_obstacle] = self.gyro_sensor.main_angle + ((self.scan_range * (data.ranges.index(self.farest_obstacle) / nb_values)) - (self.scan_range / 2))"""
+        
         if np.nanmin(data.ranges) < (2*self.dist_detection):
-            self.obstacle_detection = True
-            self.distance_restante = np.nanmin(data.ranges)
+            t= np.nanmax(data.ranges[nb_values//2 -20: nb_values//2 + 20])
+            if np.nanmin(data.ranges) < (self.dist_detection):
+                self.obstacle_detection = True
+                
+            elif np.nanmax(data.ranges[nb_values//2 -20: nb_values//2 + 20]) < (2*self.dist_detection) and self.avoid_obstacle == False:
+                min_val= np.nanmax(data.ranges[nb_values//2 -20: nb_values//2 + 20])
+                self.avoid_obstacle = True
+                self.avoid_dist = np.nanmin(data.ranges)
+                avoid_angle= Rad2Deg(math.atan(self.avoid_offset / self.avoid_dist))
+                if (data.ranges.index(min_val) > nb_values//2):
+                    self.gyro_sensor.RegisterTargetAngle(avoid_angle)
+                else:
+                    self.gyro_sensor.RegisterTargetAngle(-avoid_angle)
+                
 
     def Reset(self, deep_reset= False):
         self.is_extract_points = False
+        self.avoid_dist = 0
         if deep_reset:
             self.is_extract_points = None
         self.farest_obstacle = 0
@@ -104,7 +121,7 @@ class RobotBehavior(object):
     #############################################################################
     def __init__(self, handle_pub, T):
         self.gyro_sensor= GyroSensor()
-        self.lidar_sensor = LidarSensor(self.gyro_sensor, dist_detection= 0.5)
+        self.lidar_sensor = LidarSensor(self.gyro_sensor, dist_detection= 0.75)
         self.bumper_sensor= BumperSensor()
         self.twist = Twist()
         self.twist_real = Twist()
@@ -125,12 +142,12 @@ class RobotBehavior(object):
         self.time_rotate= 2.5
         
         # instance of fsm with source state, destination state, condition (transition), callback (defaut: None)
-        self.fs = fsm([ ("Start","JoyControl", True ),
+        self.fs = fsm(states=[ ("Start","JoyControl", True ),
                 ("JoyControl","AutonomousMode1", self.check_JoyControl_To_AutonomousMode1, self.DoAutonomousMode1),
                 ("JoyControl","JoyControl", self.KeepJoyControl, self.DoJoyControl),
                 ("AutonomousMode1","JoyControl", self.check_AutonomousMode1_To_JoyControl, self.DoJoyControl),
                 ("AutonomousMode1","AutonomousMode1", self.KeepAutonomousMode1, self.DoAutonomousMode1),
-                #("AutonomousMode1","rotate", self.check_AutonomousMode1_To_rotate, self.Dorotate),
+                ("AutonomousMode1","rotate", self.check_AutonomousMode1_To_rotate, self.Dorotate),
                 ("AutonomousMode1","stop1", self.check_AutonomousMode1_To_stop1, self.Dostop1),
                 ("stop1","JoyControl", self.check_stop1_To_JoyControl, self.DoJoyControl),
                 ("stop1","stop1", self.Keepstop1, self.Dostop1),
@@ -149,7 +166,8 @@ class RobotBehavior(object):
                 ("stop3","AutonomousMode1", self.check_stop3_To_AutonomousMode1, self.DoAutonomousMode1),
                 ("AutonomousMode1", "Virage", self.check_AutonomousMode1_To_Virage, self.DoVirage),
                 ("Virage", "Virage", self.KeepVirage, self.DoVirage),
-                ("Virage", "recule", self.check_Virage_To_recule, self.Dorecule)])
+                ("Virage", "stop1", self.check_Virage_To_Stop1, self.Dostop1),
+                ("Virage", "AutonomousMode1", self.check_Virage_To_Autonomous, self.DoAutonomousMode1)], robot=self)
     #############################################################################
     # Bumper
     #############################################################################   
@@ -248,8 +266,8 @@ class RobotBehavior(object):
     def check_stop1_To_recule(self,fss):
         return self.cpt == 1
 
-    #def check_AutonomousMode1_To_rotate(self, fss):
-    #    return  self.bumper_sensor.collision == False #and self.lidar_sensor.obstacle_detection
+    def check_AutonomousMode1_To_rotate(self, fss):
+        return  self.bumper_sensor.collision == False and self.lidar_sensor.obstacle_detection and self.lidar_sensor.avoid_obstacle == False
 
     def check_stop2_To_rotate(self,fss):
         return self.cpt == 2
@@ -263,11 +281,14 @@ class RobotBehavior(object):
     def check_rotate_To_stop3(self,fss):
         return self.enough == True
     
-    def check_Virage_To_recule(self,fss):
-        return  self.twist.linear.x == 0 
+    def check_Virage_To_Autonomous(self,fss):
+        return  self.enough == True
+    
+    def check_Virage_To_Stop1(self,fss):
+        return self.bumper_sensor.collision == True
     
     def check_AutonomousMode1_To_Virage(self,fss):
-        return self.lidar_sensor.obstacle_detection and self.bumper_sensor.collision == False
+        return self.lidar_sensor.avoid_obstacle == True
     
     #Le turtlebot doit pouvoir se controler au joystick peut importe l'état ou il est
 
@@ -316,7 +337,7 @@ class RobotBehavior(object):
         return (not self.check_stop3_To_AutonomousMode1(fss) and not self.check_stop3_To_JoyControl(fss))
     
     def KeepVirage(self,fss):
-        return (not self.check_Virage_To_recule(fss) and not self.check_Virage_To_JoyControl(fss))
+        return (not self.check_Virage_To_Autonomous(fss) and not self.check_Virage_To_JoyControl(fss) and not self.check_Virage_To_Stop1(fss))
 
 
 
@@ -455,9 +476,18 @@ class RobotBehavior(object):
         pass
 
     def DoVirage(self,fss,value):
-        while self.lidar_sensor.distance_restante > self.lidar_sensor.dist_detection:
-            self.twist.angular.z = self.twist.linear.x/90
-            self.twist.linear.x == 0 
+        go_avoid = Twist()
+        go_avoid.angular.z = self.vmax/3.0
+        if self.gyro_sensor.rotation_target < 0:
+            go_avoid.angular.z *= -1
+        go_avoid.linear.x = self.vmax/3.0
+        self.pub.publish(go_avoid)
+        if self.gyro_sensor.main_angle >= self.gyro_sensor.angle_target - 5 and self.gyro_sensor.main_angle <= self.gyro_sensor.angle_target + 5 :
+            self.lidar_sensor.avoid_obstacle = False
+            self.enough = True
+            self.gyro_sensor.Reset()
+            self.lidar_sensor.Reset()
+        
 
 
 #############################################################################

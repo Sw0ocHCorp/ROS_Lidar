@@ -11,9 +11,10 @@ class fsm(object):
     """ A simple to use finite state machine class.
         Allows definition of multiple states, condition functions from state to state and optional callbacks
     """
-    def __init__(self, states=[]):
+    def __init__(self, robot, states=[]):
         self._states=states
         self.currentState = None
+        self.robot = robot
 
     def start(self,startState=None):
         """ Start the finite state machine
